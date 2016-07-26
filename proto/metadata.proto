@@ -1,0 +1,10 @@
+option java_package = "com.companyname.project.proto";
+
+message KeyValueProto {
+	required string key = 1;
+	required string value = 2;
+}
+
+message KeyValueListProto {
+	repeated KeyValueProto keyvalue = 1;
+}
