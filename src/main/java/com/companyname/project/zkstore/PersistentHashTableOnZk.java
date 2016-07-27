@@ -38,16 +38,16 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
 
   private static final int DEFAULT_HASHTABLE_BUCKETS_NUM = 60;
 
-  protected static final String DEFAULT_DIR_NAME = "node-labels";
-  protected static final String DEFAULT_BUCKET_PREFIX = "nodeid-bucket";
+  protected static final String DEFAULT_DIR_NAME = "persistent-hashtable";
+  protected static final String DEFAULT_BUCKET_PREFIX = "hashtable-bucket";
   protected static final String DEFAULT_NODE_LABEL_LATEST_VERSION =
-      "node-label-latest-version";
+      "zk-latest-version";
 
   private String zkWorkingPath;
 
-  private String defaultzkLatestNodeToLabelsPath;
-  private String zkLatestNodeToLabelsPath;
-  private String zkNewNodeToLabelsPath;
+  private String defaultzkLatestPath;
+  private String zkLatestPath;
+  private String zkNewPath;
 
   private String latestVersion;
   private String newVersion;
@@ -72,22 +72,14 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
 
   private boolean initialized = false;
 
-  private String zkLatestPath;
-
   @Override
   public void put(String key, String value) {
-    if (!initialized) {
-      recover();
-    }
     hashtable.put(key, value);
     store();
   }
 
   @Override
   public String get(String key) {
-    if (!initialized) {
-      recover();
-    }
     return hashtable.get(key);
   }
   
@@ -119,9 +111,9 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
     zkWorkingPath =
         conf.get(Configuration.ZK_STORE_ROOT_DIR,
             getDefaultZKNodeLabelsRootDir());
-    defaultzkLatestNodeToLabelsPath =
+    defaultzkLatestPath =
         conf.get(Configuration.ZK_HASHTABLE_STORE_DIR,
-            getDefaultZKNodeToLabelsDir());
+            getDefaultZKStoreDir());
 
     createConnection();
 
@@ -142,14 +134,9 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
         + DEFAULT_DIR_NAME;
   }
 
-  private String getDefaultZKNodeLabelsDir() throws IOException {
+  private String getDefaultZKStoreDir() throws IOException {
     return Configuration.DEFAULT_ZK_STATE_STORE_PARENT_PATH + "/"
-        + DEFAULT_DIR_NAME + "/labels";
-  }
-
-  private String getDefaultZKNodeToLabelsDir() throws IOException {
-    return Configuration.DEFAULT_ZK_STATE_STORE_PARENT_PATH + "/"
-        + DEFAULT_DIR_NAME + "/nodeToLabels";
+        + DEFAULT_DIR_NAME + "/ZKStore";
   }
   
   private List<ACL> getZKAcls(Configuration conf) throws Exception {
@@ -185,7 +172,7 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
   private void store() {
 
     getNewNodeLabelPath();
-    if (!initNodeIdBuckets(zkNewNodeToLabelsPath)) {
+    if (!initNodeIdBuckets(zkNewPath)) {
       LOG.error("node id buckets initilize fails");
       return;
     }
@@ -207,7 +194,7 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
       }
       for (int i = 0; i < DEFAULT_HASHTABLE_BUCKETS_NUM; i++) {
         String nodeLabelPath =
-            getNodePath(zkNewNodeToLabelsPath, getPartitionZnodeName(i));
+            getNodePath(zkNewPath, getPartitionZnodeName(i));
 
         data =
             hashtableBuckets[i] != null ? getProtoFromHashtable(
@@ -220,7 +207,7 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
       cleanUpOldVersion();
     } catch (Exception e) {
       LOG.error("Execute NodeToLabels update in zookeeper fail "
-          + zkLatestNodeToLabelsPath);
+          + zkLatestPath);
       e.printStackTrace();
     }
 
@@ -271,9 +258,9 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
       List<String> nodes = this.getChildren(zkWorkingPath, null);
       for (String node : nodes) {
         nodePath = getNodePath(zkWorkingPath, node);
-        if (nodePath.startsWith(defaultzkLatestNodeToLabelsPath)) {
+        if (nodePath.startsWith(defaultzkLatestPath)) {
           // This should be the node we cared to delete
-          if (!nodePath.equals(zkLatestNodeToLabelsPath)) {
+          if (!nodePath.equals(zkLatestPath)) {
             delPathWithChildren(nodePath, -1);
           }
         }
@@ -288,13 +275,13 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
     byte[] version =
         getData(zkWorkingPath + "/" + DEFAULT_NODE_LABEL_LATEST_VERSION, null);
     if (version == null) {
-      zkLatestNodeToLabelsPath = defaultzkLatestNodeToLabelsPath;
+      zkLatestPath = defaultzkLatestPath;
     } else {
       latestVersion = new String(version);
-      zkLatestNodeToLabelsPath =
-          defaultzkLatestNodeToLabelsPath + latestVersion;
+      zkLatestPath =
+          defaultzkLatestPath + latestVersion;
     }
-    LOG.info( "hashtable data path " + zkLatestNodeToLabelsPath);
+    LOG.info( "hashtable data path " + zkLatestPath);
   }
 
   @Override
@@ -334,8 +321,9 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
 
   private Hashtable<String, String> getHashTableFromZK() {
     
-    Hashtable<String, String> hashtable = null;
+    Hashtable<String, String> hashtable = new Hashtable<String, String> ();
     try {
+      getLatestNodeLabelPath();
       Set<String> nodeToLabelsSet;
       List<String> nodeToLabelsList = getChildren(zkLatestPath, null);
       nodeToLabelsSet = new HashSet<String>(nodeToLabelsList);
@@ -350,14 +338,16 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
         }
 
         String nodeToLabelPath =
-            getNodePath(zkLatestNodeToLabelsPath, nodeIdString);
+            getNodePath(zkLatestPath, nodeIdString);
         byte[] rawData = getData(nodeToLabelPath, null);
-        
-        KeyValueListProto keyValueList = KeyValueListProto.parseFrom(rawData);
-        hashtable = getHashtableFromProto(keyValueList);
+        if(rawData != null){
+          KeyValueListProto keyValueList = KeyValueListProto.parseFrom(rawData);
+          Hashtable<String, String> smallHashtable = getHashtableFromProto(keyValueList);
+          hashtable.putAll(smallHashtable);
+        }
       }
     } catch (Exception e) {
-      LOG.error("recover labels from zookeeper " + zkLatestNodeToLabelsPath
+      LOG.error("recover labels from zookeeper " + zkLatestPath
           + " fails");
     }
     return hashtable;
@@ -366,12 +356,14 @@ public class PersistentHashTableOnZk extends PersistentHashTable {
   private void getNewNodeLabelPath() {
     // get a not exist version
     try {
-      zkNewNodeToLabelsPath =
-          createSequentialDirWithParents(defaultzkLatestNodeToLabelsPath);
-      if (zkNewNodeToLabelsPath == null || zkNewNodeToLabelsPath.isEmpty()) {
+      zkNewPath =
+          createSequentialDirWithParents(defaultzkLatestPath);
+      if (zkNewPath == null || zkNewPath.isEmpty()) {
         LOG.error("get New NodeLabel Path fail, the new path is empty.");
         return;
       }
+      newVersion =
+          zkNewPath.substring(defaultzkLatestPath.length());
     } catch (Exception e) {
       LOG.error("get New NodeLabel Path fail. ");
       e.printStackTrace();
